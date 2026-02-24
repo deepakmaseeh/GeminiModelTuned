@@ -45,21 +45,24 @@ async function POST(request) {
 
   const imageFile = formData.get("image");
   const text = formData.get("text");
+  const userPrompt = typeof text === "string" ? text.trim() : "";
+  const hasImage = imageFile && typeof imageFile.arrayBuffer === "function";
 
-  if (!imageFile || typeof imageFile.arrayBuffer !== "function") {
+  if (!hasImage && !userPrompt) {
     return Response.json(
-      { error: "Form must include an image file (field: image)" },
+      { error: "Send an image and/or a message (text required for chat-only)." },
       { status: 400 }
     );
   }
 
-  const userPrompt = typeof text === "string" ? text.trim() : "";
-  const arrayBuffer = await imageFile.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  const base64 = buffer.toString("base64");
-  const mimeType = imageFile.type || "image/jpeg";
+  let body;
+  if (hasImage) {
+    const arrayBuffer = await imageFile.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64 = buffer.toString("base64");
+    const mimeType = imageFile.type || "image/jpeg";
 
-  const auctionPrompt = userPrompt || [
+    const auctionPrompt = userPrompt || [
     "You are an auction specialist. Analyze this image in detail and respond ONLY in this format (include every bold label; write N/A if not visible):",
     "",
     "**Item name:** (What is this object? One clear line.)",
@@ -76,26 +79,50 @@ async function POST(request) {
     "Price is mandatory. Be thorough but concise. Use N/A only when truly not visible.",
   ].join("\n");
 
-  const body = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: auctionPrompt },
-          { inlineData: { mimeType, data: base64 } },
-        ],
+    body = {
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: auctionPrompt },
+            { inlineData: { mimeType, data: base64 } },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 4096,
       },
-    ],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 4096,
-    },
-  };
+    };
+  } else {
+    body = {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userPrompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 4096,
+      },
+    };
+  }
 
   try {
-    const auth = new GoogleAuth({
-      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-    });
+    var authOptions = { scopes: ["https://www.googleapis.com/auth/cloud-platform"] };
+    var keyJson = process.env.GCP_SERVICE_ACCOUNT_KEY;
+    if (keyJson && typeof keyJson === "string") {
+      try {
+        authOptions.credentials = JSON.parse(keyJson);
+      } catch (e) {
+        return Response.json(
+          { error: "Invalid GCP_SERVICE_ACCOUNT_KEY JSON." },
+          { status: 500 }
+        );
+      }
+    }
+    const auth = new GoogleAuth(authOptions);
     const client = await auth.getClient();
     const tokenResponse = await client.getAccessToken();
     const token = tokenResponse.token || (tokenResponse.res && tokenResponse.res.data && tokenResponse.res.data.access_token);
