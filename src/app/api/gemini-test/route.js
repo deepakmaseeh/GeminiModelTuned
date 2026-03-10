@@ -90,20 +90,30 @@ async function POST(request) {
     const mimeType = imageFile.type || "image/jpeg";
 
     const auctionPrompt = userPrompt || [
-    "You are an auction specialist. Analyze this image in detail and respond ONLY in this format (include every bold label; write N/A if not visible):",
+    "You are an auction specialist. Analyze this image in detail.",
     "",
-    "**Item name:** (What is this object? One clear line.)",
-    "**Condition:** (Overall condition: wear, scratches, chips, cracks, repairs, completeness, authenticity cues.)",
-    "**Materials:** (What it is made of: e.g. wood, ceramic, metal, fabric, glass.)",
-    "**Dimensions:** (Size if visible or estimable: height, width, depth, weight if relevant.)",
-    "**Age/Period:** (Approximate age, era, or period if identifiable.)",
-    "**Maker/Origin:** (Manufacturer, artist, region, or origin if visible.)",
-    "**Details:** (Full description: style, design, markings, inscriptions, notable features, quality.)",
-    "**Damage/Flaws:** (Any damage, restoration, missing parts, or flaws.)",
-    "**Market notes:** (Why it might sell, comparable sales, demand, or caveats.)",
-    "**Price:** (Most important: clear estimate or range in currency, e.g. $50–$80 or €120. Be specific and brief reasoning.)",
+    "If the image shows MULTIPLE distinct items (e.g. a group of trading cards, several lots):",
+    "1. First give a GROUP SUMMARY in the same format below — **Item name:** e.g. 'Group of 5 Pokémon cards (4 base, 1 rare)'; **Condition:** overall; **Details:** what the group contains; **Market notes:** which item is the standout/rare; **Price:** combined or N/A.",
+    "2. Then write exactly: Per-item breakdown:",
+    "3. Then for EACH item use the full format below, separated by exactly: --- Next item ---",
     "",
-    "Price is mandatory. Be thorough but concise. Use N/A only when truly not visible.",
+    "If there is only ONE item, use the format once (no group summary).",
+    "",
+    "Use ONLY this format (include every bold label; write N/A if not visible):",
+    "",
+    "**Item name:** (One clear line. For groups: describe the group. For single items: add '— Rare' or '— Standout' if top in a group.)",
+    "**Condition:** (Overall condition: wear, scratches, completeness, authenticity.)",
+    "**Materials:** (e.g. cardstock, paper, wood, ceramic.)",
+    "**Dimensions:** (Size if visible.)",
+    "**Age/Period:** (Era, set year, or period.)",
+    "**Maker/Origin:** (Set name, manufacturer, artist, region.)",
+    "**Rarity:** (For trading cards: Common, Uncommon, Rare, Holo, etc. N/A otherwise.)",
+    "**Details:** (Full description: style, design, markings, notable features.)",
+    "**Damage/Flaws:** (Damage, restoration, missing parts.)",
+    "**Market notes:** (Why it might sell, comparables, demand.)",
+    "**Price:** (Clear estimate or range in currency. Use N/A only if not estimable.)",
+    "",
+    "Price is mandatory. Be thorough but concise.",
   ].join("\n");
 
     body = {
@@ -118,7 +128,7 @@ async function POST(request) {
       ],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
       },
     };
   } else {
