@@ -1,5 +1,32 @@
 const { GoogleAuth } = require("google-auth-library");
 
+// Reuse access token across requests (same serverless instance). Refresh 5 min before expiry.
+var tokenCache = null;
+var AUTH_CACHE_BUFFER_MS = 5 * 60 * 1000;
+
+async function getAccessToken() {
+  if (tokenCache && tokenCache.expiresAt > Date.now()) {
+    return tokenCache.token;
+  }
+  var authOptions = { scopes: ["https://www.googleapis.com/auth/cloud-platform"] };
+  var keyJson = process.env.GCP_SERVICE_ACCOUNT_KEY;
+  if (keyJson && typeof keyJson === "string") {
+    try {
+      authOptions.credentials = JSON.parse(keyJson);
+    } catch (e) {
+      throw new Error("Invalid GCP_SERVICE_ACCOUNT_KEY JSON.");
+    }
+  }
+  const auth = new GoogleAuth(authOptions);
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  const token = tokenResponse.token || (tokenResponse.res && tokenResponse.res.data && tokenResponse.res.data.access_token);
+  if (token) {
+    tokenCache = { token, expiresAt: Date.now() + (60 * 60 * 1000) - AUTH_CACHE_BUFFER_MS };
+  }
+  return token || null;
+}
+
 function getGenerateContentUrl() {
   var projectId = process.env.PROJECT_ID;
   var location = process.env.VERTEX_LOCATION;
@@ -91,7 +118,7 @@ async function POST(request) {
       ],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 2048,
       },
     };
   } else {
@@ -104,31 +131,16 @@ async function POST(request) {
       ],
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 4096,
+        maxOutputTokens: 2048,
       },
     };
   }
 
   try {
-    var authOptions = { scopes: ["https://www.googleapis.com/auth/cloud-platform"] };
-    var keyJson = process.env.GCP_SERVICE_ACCOUNT_KEY;
-    if (keyJson && typeof keyJson === "string") {
-      try {
-        authOptions.credentials = JSON.parse(keyJson);
-      } catch (e) {
-        return Response.json(
-          { error: "Invalid GCP_SERVICE_ACCOUNT_KEY JSON." },
-          { status: 500 }
-        );
-      }
-    }
-    const auth = new GoogleAuth(authOptions);
-    const client = await auth.getClient();
-    const tokenResponse = await client.getAccessToken();
-    const token = tokenResponse.token || (tokenResponse.res && tokenResponse.res.data && tokenResponse.res.data.access_token);
+    const token = await getAccessToken();
     if (!token) {
       return Response.json(
-        { error: "Could not get Google access token. Check GOOGLE_APPLICATION_CREDENTIALS." },
+        { error: "Could not get Google access token. Check GCP_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS." },
         { status: 500 }
       );
     }
@@ -153,6 +165,12 @@ async function POST(request) {
     }
 
     if (!res.ok) {
+      if (res.status === 429) {
+        return Response.json(
+          { error: "Service busy. Please try again in a moment." },
+          { status: 503 }
+        );
+      }
       var msg = (data.error && data.error.message) || (data.error && data.error.status) || "Vertex AI request failed";
       if (data.error && data.error.details) msg += " " + JSON.stringify(data.error.details);
       if (process.env.NODE_ENV === "development") console.error("[gemini-test] Vertex error:", res.status, data);

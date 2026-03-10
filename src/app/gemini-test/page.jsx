@@ -24,6 +24,22 @@ function parseProductDetails(text) {
     else if (label.includes("market")) out.marketNotes = content;
     else if (label.includes("value") || label.includes("price") || label.includes("estimate")) out.price = content;
   }
+  // Fallbacks for price when the model doesn't follow the bold label exactly.
+  if (!out.price) {
+    // Lines like: "Price: $10–$20" or "Estimated value - $50 to $80"
+    const priceLineMatch = t.match(/^(?:\s*(?:price|value|estimate)[^:\n]*[:\-]\s*)(.+)$/gim);
+    if (priceLineMatch && priceLineMatch.length > 0) {
+      const firstLine = priceLineMatch[0].replace(/^(?:\s*(?:price|value|estimate)[^:\n]*[:\-]\s*)/i, "").trim();
+      if (firstLine) out.price = firstLine;
+    } else {
+      // As a last resort, grab the first line that clearly looks like a money value.
+      const priceLikeLine = t
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => /(\$|€|£|₹|rs\.?|inr|\d+\s*(usd|eur|gbp))/i.test(line));
+      if (priceLikeLine) out.price = priceLikeLine;
+    }
+  }
   if (Object.keys(out).length > 0) return out;
   return { raw: t };
 }
@@ -87,6 +103,7 @@ export default function GeminiTestPage() {
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const lastSentRef = useRef(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -135,6 +152,56 @@ export default function GeminiTestPage() {
     }
   }
 
+  async function handleRetry() {
+    const last = lastSentRef.current;
+    if (!last || loading) return;
+    setError(null);
+    setMessages((prev) => prev.slice(0, -1));
+    setMessages((prev) => [...prev, { role: "assistant", text: null, loading: true }]);
+    setLoading(true);
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+    try {
+      const formData = new FormData();
+      if (last.file) formData.append("image", last.file);
+      formData.append("text", last.text);
+      const res = await fetch("/api/gemini-test", { method: "POST", body: formData, signal });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? `Error ${res.status}`);
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", text: "Error: " + (data.error || res.status), loading: false };
+          return next;
+        });
+        return;
+      }
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", text: data.text ?? "", loading: false };
+        return next;
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        setMessages((prev) => {
+          const next = [...prev];
+          next[next.length - 1] = { role: "assistant", text: "Stopped.", loading: false };
+          return next;
+        });
+        return;
+      }
+      setError(err.message ?? "Request failed");
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", text: "Error: " + (err.message || "Request failed"), loading: false };
+        return next;
+      });
+    } finally {
+      setLoading(false);
+      abortControllerRef.current = null;
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
@@ -148,6 +215,7 @@ export default function GeminiTestPage() {
     if (file) {
       imageDataUrl = await readFileAsDataUrl(file);
     }
+    lastSentRef.current = { text: userText, file: file || null };
     setMessages((prev) => [
       ...prev,
       { role: "user", text: displayText, imageUrl: imageDataUrl || undefined },
@@ -417,12 +485,6 @@ export default function GeminiTestPage() {
                 <li>• Response includes: name, condition, materials, dimensions, price.</li>
               </ul>
             </section>
-            <section>
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Credentials (Vercel)</h3>
-              <p className="text-[12px] text-slate-600">
-                For deploy: set <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px] font-mono">GCP_SERVICE_ACCOUNT_KEY</code> to the <strong>full JSON</strong> of your service account file (copy the entire file contents). See <code className="rounded bg-slate-100 px-1 py-0.5 text-[11px] font-mono">VERCEL_DEPLOY.md</code>.
-              </p>
-            </section>
             </div>
           </aside>
         </>
@@ -434,8 +496,18 @@ export default function GeminiTestPage() {
         </div>
       )}
       {error && !copyFeedback && (
-        <div className="shrink-0 border-t border-slate-200/80 bg-red-50/80 px-4 py-2">
-          <p className="text-center text-[13px] text-red-600">{error}</p>
+        <div className="shrink-0 border-t border-slate-200/80 bg-red-50/80 px-4 py-2 flex items-center justify-center gap-3 flex-wrap">
+          <p className="text-[13px] text-red-600">{error}</p>
+          {lastSentRef.current && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={loading}
+              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[12px] font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
